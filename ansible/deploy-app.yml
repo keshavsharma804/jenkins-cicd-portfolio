@@ -1,0 +1,101 @@
+---
+- name: Deploy Application
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  
+  vars:
+    app_name: "MyWebApp"
+    app_version: "1.0.0"
+    deploy_path: "/var/jenkins_home/deployments/myapp"
+    env: "production"
+  
+  tasks:
+    - name: Display deployment information
+      debug:
+        msg: |
+          ==========================================
+          Deploying {{ app_name }} v{{ app_version }}
+          Environment: {{ env }}
+          Target: {{ ansible_hostname }}
+          ==========================================
+    
+    - name: Create deployment directory
+      file:
+        path: "{{ deploy_path }}"
+        state: directory
+        mode: '0755'
+    
+    - name: Create application subdirectories
+      file:
+        path: "{{ deploy_path }}/{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - bin
+        - config
+        - logs
+        - data
+    
+    - name: Deploy application files
+      copy:
+        content: |
+          #!/bin/bash
+          echo "{{ app_name }} v{{ app_version }} is running"
+          echo "Environment: {{ env }}"
+          echo "PID: $$"
+        dest: "{{ deploy_path }}/bin/start.sh"
+        mode: '0755'
+    
+    - name: Create configuration file
+      copy:
+        content: |
+          APP_NAME={{ app_name }}
+          APP_VERSION={{ app_version }}
+          ENVIRONMENT={{ env }}
+          LOG_LEVEL=INFO
+          PORT=8080
+        dest: "{{ deploy_path }}/config/app.conf"
+        mode: '0644'
+    
+    - name: Create application metadata
+      copy:
+        content: |
+          {
+            "app_name": "{{ app_name }}",
+            "version": "{{ app_version }}",
+            "environment": "{{ env }}",
+            "deployed_at": "{{ ansible_date_time.iso8601 }}",
+            "deployed_by": "Jenkins + Ansible"
+          }
+        dest: "{{ deploy_path }}/metadata.json"
+        mode: '0644'
+    
+    - name: Create deployment log
+      lineinfile:
+        path: "{{ deploy_path }}/logs/deployment.log"
+        line: "[{{ ansible_date_time.iso8601 }}] {{ app_name }} v{{ app_version }} deployed to {{ env }}"
+        create: yes
+    
+    - name: Verify deployment
+      stat:
+        path: "{{ deploy_path }}/bin/start.sh"
+      register: app_binary
+    
+    - name: Deployment verification result
+      debug:
+        msg: "✓ Deployment verified - Application binary exists"
+      when: app_binary.stat.exists
+    
+    - name: Display deployment summary
+      debug:
+        msg: |
+          ==========================================
+          DEPLOYMENT COMPLETED SUCCESSFULLY!
+          ==========================================
+          Application: {{ app_name }}
+          Version: {{ app_version }}
+          Environment: {{ env }}
+          Location: {{ deploy_path }}
+          Timestamp: {{ ansible_date_time.iso8601 }}
+          ==========================================

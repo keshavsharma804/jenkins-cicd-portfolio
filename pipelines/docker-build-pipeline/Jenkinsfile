@@ -1,0 +1,143 @@
+pipeline {
+    agent any
+    
+    parameters {
+        string(name: 'APP_VERSION', defaultValue: '2.0.0', description: 'Application version')
+        choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Environment')
+    }
+    
+    environment {
+        DOCKER_IMAGE = "myapp"
+        DOCKER_TAG = "${params.APP_VERSION}-${params.ENVIRONMENT}"
+    }
+    
+    stages {
+        stage('Create Application Files') {
+            steps {
+                echo "Creating application for ${params.ENVIRONMENT}..."
+                sh '''
+                    mkdir -p app
+                    cat > app/app.py << 'EOF'
+from flask import Flask, jsonify
+import os
+import socket
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return jsonify({
+        'app': 'MyDockerApp',
+        'version': os.getenv('APP_VERSION', 'unknown'),
+        'environment': os.getenv('ENVIRONMENT', 'unknown'),
+        'hostname': socket.gethostname(),
+        'message': 'Hello from Jenkins + Docker CI/CD!'
+    })
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'healthy'})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+EOF
+                    
+                    echo "flask==2.3.0" > app/requirements.txt
+                    echo "✓ Application files created"
+                '''
+            }
+        }
+        
+        stage('Create Dockerfile') {
+            steps {
+                echo 'Creating Dockerfile...'
+                sh '''
+                    cat > Dockerfile << 'EOF'
+FROM python:3.9-slim
+WORKDIR /app
+COPY app/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app/app.py .
+ENV APP_VERSION=unknown
+ENV ENVIRONMENT=unknown
+EXPOSE 5000
+CMD ["python", "app.py"]
+EOF
+                    echo "✓ Dockerfile created"
+                '''
+            }
+        }
+        
+        stage('Build Docker Image') {
+            steps {
+                echo "Building Docker image: ${DOCKER_IMAGE}:${DOCKER_TAG}..."
+                sh '''
+                    docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} -t ${DOCKER_IMAGE}:latest .
+                    echo "✓ Docker image built successfully"
+                '''
+            }
+        }
+        
+        stage('Test Docker Image') {
+            steps {
+                echo 'Testing Docker image...'
+                sh '''
+                    docker run -d \
+                        --name test-container-${BUILD_NUMBER} \
+                        -e APP_VERSION=${APP_VERSION} \
+                        -e ENVIRONMENT=${ENVIRONMENT} \
+                        ${DOCKER_IMAGE}:${DOCKER_TAG}
+                    
+                    sleep 5
+                    
+                    if docker ps --filter "name=test-container-${BUILD_NUMBER}" --filter "status=running" | grep test-container-${BUILD_NUMBER}; then
+                        echo "✓ Container is running"
+                    else
+                        echo "✗ Container is not running"
+                        docker logs test-container-${BUILD_NUMBER}
+                        exit 1
+                    fi
+                    
+                    docker logs test-container-${BUILD_NUMBER} 2>&1 | grep -q "Running on" && echo "✓ Flask application started successfully"
+                    
+                    docker stop test-container-${BUILD_NUMBER}
+                    docker rm test-container-${BUILD_NUMBER}
+                    
+                    echo "✅ All tests passed!"
+                '''
+            }
+        }
+        
+        stage('List Docker Images') {
+            steps {
+                echo 'Built Docker images:'
+                sh '''
+                    echo "All myapp images:"
+                    docker images | grep myapp
+                '''
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo '=========================================='
+            echo '✅ DOCKER BUILD SUCCESSFUL!'
+            echo "Image: ${DOCKER_IMAGE}:${DOCKER_TAG}"
+            echo "Version: ${params.APP_VERSION}"
+            echo "Environment: ${params.ENVIRONMENT}"
+            echo "Ready for deployment!"
+            echo '=========================================='
+        }
+        failure {
+            echo '=========================================='
+            echo '❌ DOCKER BUILD FAILED!'
+            echo 'Check logs above for details'
+            echo '=========================================='
+        }
+        always {
+            sh 'docker stop test-container-${BUILD_NUMBER} 2>/dev/null || true'
+            sh 'docker rm test-container-${BUILD_NUMBER} 2>/dev/null || true'
+        }
+    }
+}

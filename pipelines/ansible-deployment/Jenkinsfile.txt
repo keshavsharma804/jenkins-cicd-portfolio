@@ -1,0 +1,125 @@
+pipeline {
+    agent any
+    
+    parameters {
+        string(name: 'APP_VERSION', defaultValue: '2.0.0', description: 'Application version to deploy')
+        choice(name: 'ENVIRONMENT', choices: ['development', 'staging', 'production'], description: 'Target environment')
+        string(name: 'APP_NAME', defaultValue: 'MyWebApp', description: 'Application name')
+    }
+    
+    environment {
+        ANSIBLE_PLAYBOOK_PATH = '/var/jenkins_home/ansible-playbooks'
+        DEPLOY_PATH = '/var/jenkins_home/deployments/myapp'
+    }
+    
+    stages {
+        stage('Initialize') {
+            steps {
+                echo '=========================================='
+                echo 'Ansible Deployment Pipeline'
+                echo '=========================================='
+                echo "Application: ${params.APP_NAME}"
+                echo "Version: ${params.APP_VERSION}"
+                echo "Environment: ${params.ENVIRONMENT}"
+                echo "Build: #${BUILD_NUMBER}"
+                echo '=========================================='
+            }
+        }
+        
+        stage('Pre-Deployment Checks') {
+            steps {
+                echo 'Running pre-deployment checks...'
+                sh '''
+                    echo "Checking Ansible availability..."
+                    ansible --version
+                    
+                    echo "Checking playbook exists..."
+                    ls -l ${ANSIBLE_PLAYBOOK_PATH}/deploy-app.yml
+                    
+                    echo "✓ All pre-deployment checks passed"
+                '''
+            }
+        }
+        
+        stage('Execute Ansible Playbook') {
+            steps {
+                echo "Deploying ${params.APP_NAME} v${params.APP_VERSION} to ${params.ENVIRONMENT}..."
+                
+                ansiblePlaybook(
+                    playbook: "${ANSIBLE_PLAYBOOK_PATH}/deploy-app.yml",
+                    installation: 'Ansible',
+                    extraVars: [
+                        app_name: "${params.APP_NAME}",
+                        app_version: "${params.APP_VERSION}",
+                        env: "${params.ENVIRONMENT}"
+                    ],
+                    colorized: true
+                )
+                
+                echo '✓ Ansible playbook executed'
+            }
+        }
+        
+        stage('Post-Deployment Verification') {
+            steps {
+                echo 'Verifying deployment...'
+                
+                sh '''
+                    echo "Checking deployment directory..."
+                    ls -la ${DEPLOY_PATH}
+                    
+                    echo ""
+                    echo "Checking deployed files..."
+                    ls -la ${DEPLOY_PATH}/bin/
+                    ls -la ${DEPLOY_PATH}/config/
+                    
+                    echo ""
+                    echo "Reading configuration..."
+                    cat ${DEPLOY_PATH}/config/app.conf
+                    
+                    echo ""
+                    echo "Reading metadata..."
+                    cat ${DEPLOY_PATH}/metadata.json
+                    
+                    echo ""
+                    echo "Checking deployment log..."
+                    cat ${DEPLOY_PATH}/logs/deployment.log
+                    
+                    echo ""
+                    echo "✓ All verification checks passed"
+                '''
+            }
+        }
+        
+        stage('Display Deployment Info') {
+            steps {
+                sh '''
+                    echo "=========================================="
+                    echo "Deployment Summary"
+                    echo "=========================================="
+                    echo "Deployed to: ${DEPLOY_PATH}"
+                    echo "Directory structure:"
+                    ls -R ${DEPLOY_PATH}
+                    echo "=========================================="
+                '''
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo '=========================================='
+            echo '✅ DEPLOYMENT SUCCESSFUL!'
+            echo "Application: ${params.APP_NAME} v${params.APP_VERSION}"
+            echo "Environment: ${params.ENVIRONMENT}"
+            echo "Deployed via: Jenkins + Ansible"
+            echo '=========================================='
+        }
+        failure {
+            echo '=========================================='
+            echo '❌ DEPLOYMENT FAILED!'
+            echo 'Check logs for error details'
+            echo '=========================================='
+        }
+    }
+}
